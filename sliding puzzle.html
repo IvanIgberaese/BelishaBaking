@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Ivan Puzzle Game — Developed and Designed by Ivan Igberaese</title>
+<style>
+  :root{
+    --bg:#f6f8fb;
+    --panel:#ffffff;
+    --tile:#3498db;
+    --tile-text:#fff;
+    --accent:#2c3e50;
+    --muted:#666;
+  }
+  html,body{height:100%;margin:0;font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;}
+  body{background:linear-gradient(180deg,#e9f0ff 0%, var(--bg) 100%); display:flex; align-items:center; justify-content:center; padding:16px;}
+  .container{width:100%; max-width:760px; background:var(--panel); border-radius:14px; box-shadow: 0 8px 30px rgba(20,30,60,0.08); padding:18px; box-sizing:border-box;}
+  header{display:flex;justify-content:space-between; align-items:center; margin-bottom:12px;}
+  h1{font-size:18px;margin:0;color:var(--accent);}
+  .dev{font-size:13px;color:var(--muted)}
+  .main{display:flex; gap:18px; flex-wrap:wrap;}
+  .board-wrap{flex:1 1 420px; display:flex; align-items:center; justify-content:center;}
+  .board{
+    width:min(420px,72vmin);
+    height:min(420px,72vmin);
+    display:grid;
+    grid-template-columns:repeat(3,1fr);
+    grid-template-rows:repeat(3,1fr);
+    gap:8px;
+    background:transparent;
+    touch-action: manipulation;
+  }
+  .tile{
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    border-radius:10px;
+    font-weight:700;
+    font-size:clamp(18px,6vmin,44px);
+    user-select:none;
+    -webkit-user-select:none;
+    box-shadow: 0 6px 12px rgba(20,30,60,0.06);
+    transition:transform .12s ease, background-color .12s ease, opacity .12s ease;
+  }
+  .tile.num{background:var(--tile); color:var(--tile-text); cursor:pointer;}
+  .tile.blank{background:transparent; box-shadow:none; cursor:default; opacity:.02;}
+  .controls{flex:0 0 220px; min-width:220px;}
+  .info{display:grid; gap:8px; margin-bottom:10px;}
+  .info .row{display:flex; justify-content:space-between; align-items:center; padding:8px 10px; border-radius:8px; background:#fbfdff; box-shadow: inset 0 -1px 0 rgba(255,255,255,0.6);}
+  .buttons{display:flex;flex-direction:column; gap:8px;}
+  button{width:100%; padding:10px 12px; border-radius:8px; border:0; background:var(--tile); color:var(--tile-text); font-weight:600; cursor:pointer; box-shadow: 0 6px 14px rgba(52,152,219,0.14);}
+  button.secondary{background:#ecf0f7; color:var(--accent); box-shadow:none; font-weight:600; border:1px solid rgba(44,62,80,0.06)}
+  .status{height:36px; display:flex; align-items:center; justify-content:center; font-weight:700;}
+  .footer{margin-top:12px; display:flex; justify-content:space-between; align-items:center; font-size:13px; color:var(--muted);}
+  @media (max-width:720px){
+    .main{flex-direction:column; align-items:stretch;}
+    .controls{order:2; width:100%;}
+    .board-wrap{order:1; margin-bottom:8px;}
+  }
+</style>
+</head>
+<body>
+  <div class="container" role="application" aria-label="Sliding puzzle game">
+    <header>
+      <div>
+        <h1>Ivan Puzzle (3×3)</h1>
+        <div class="dev">Developed by <strong>Ivan Igberaese</strong></div>
+      </div>
+      <div class="status" id="statusText"></div>
+    </header>
+
+    <div class="main">
+      <div class="board-wrap" aria-hidden="false">
+        <div id="board" class="board" role="grid" aria-label="Puzzle board"></div>
+      </div>
+
+      <aside class="controls" aria-label="Controls">
+        <div class="info" aria-hidden="false">
+          <div class="row"><div>Moves</div><div id="moves">0</div></div>
+          <div class="row"><div>Time</div><div id="time">0:00</div></div>
+          <div class="row"><div>Score</div><div id="score">0</div></div>
+        </div>
+
+        <div class="buttons">
+          <button id="startBtn">Start Game</button>
+          <button class="secondary" id="restartBtn">Restart</button>
+          <button class="secondary" id="shuffleBtn">Shuffle</button>
+          <button class="secondary" id="quitBtn">Quit</button>
+        </div>
+
+        <div style="height:12px"></div>
+
+        <div style="font-size:13px;color:var(--muted);line-height:1.2">
+          Instructions: Welcome to Ivan Puzzle Game. Tap a numbered tile adjacent to the blank to move it. Use arrow keys on desktop. Finish before time runs out to win.
+        </div>
+      </aside>
+    </div>
+
+    <div class="footer">
+      <div style="opacity:.9">3×3 Sliding Puzzle • Solvable shuffle</div>
+      <div style="font-size:12px; color:var(--muted)">Place move.mp3 and win.mp3 in same folder for sounds</div>
+    </div>
+  </div>
+
+<script>
+/*
+  sliding_puzzle.html
+  3x3 sliding puzzle with timer, scoring, sound, mobile/touch support
+  Developer: Ivan Igberaese
+*/
+
+// Config
+const GRID_SIZE = 3;
+const START_TIME = 300; // seconds
+const SHUFFLE_STEPS = 200; // legal random moves to shuffle (keeps puzzle solvable)
+const MOVE_SOUND_FILE = "move.mp3";
+const WIN_SOUND_FILE = "win.mp3";
+const DEVELOPER = "Ivan Igberaese";
+
+let numbers = []; // array length 9, 0 means blank
+let moves = 0;
+let timeLeft = START_TIME;
+let timerInterval = null;
+let score = 0;
+let gameRunning = false;
+
+const boardEl = document.getElementById('board');
+const movesEl = document.getElementById('moves');
+const timeEl = document.getElementById('time');
+const scoreEl = document.getElementById('score');
+const statusEl = document.getElementById('statusText');
+
+const startBtn = document.getElementById('startBtn');
+const restartBtn = document.getElementById('restartBtn');
+const shuffleBtn = document.getElementById('shuffleBtn');
+const quitBtn = document.getElementById('quitBtn');
+
+let moveSound = null;
+let winSound = null;
+(function loadSounds(){
+  try {
+    moveSound = new Audio(MOVE_SOUND_FILE);
+    moveSound.preload = 'auto';
+  } catch(e){ moveSound = null; }
+  try {
+    winSound = new Audio(WIN_SOUND_FILE);
+    winSound.preload = 'auto';
+  } catch(e){ winSound = null; }
+})();
+
+// Helpers
+function indexToPos(i){ return {r: Math.floor(i / GRID_SIZE), c: i % GRID_SIZE}; }
+function posToIndex(r,c){ return r * GRID_SIZE + c; }
+
+function makeSolvableShuffle(){
+  // start from solved state and do many legal random moves
+  let arr = [];
+  for(let i=1;i<GRID_SIZE*GRID_SIZE;i++) arr.push(i);
+  arr.push(0);
+  for(let i=0;i<SHUFFLE_STEPS;i++){
+    const blankIndex = arr.indexOf(0);
+    const {r,c} = indexToPos(blankIndex);
+    const neighbors = [];
+    if(r>0) neighbors.push(posToIndex(r-1,c));
+    if(r<GRID_SIZE-1) neighbors.push(posToIndex(r+1,c));
+    if(c>0) neighbors.push(posToIndex(r,c-1));
+    if(c<GRID_SIZE-1) neighbors.push(posToIndex(r,c+1));
+    const target = neighbors[Math.floor(Math.random()*neighbors.length)];
+    [arr[blankIndex], arr[target]] = [arr[target], arr[blankIndex]];
+  }
+  return arr;
+}
+
+function buildBoard(){
+  boardEl.innerHTML = '';
+  boardEl.style.gridTemplateColumns = `repeat(${GRID_SIZE}, 1fr)`;
+  numbers.forEach((num, idx) => {
+    const tile = document.createElement('div');
+    tile.className = 'tile ' + (num === 0 ? 'blank' : 'num');
+    tile.setAttribute('role','button');
+    tile.setAttribute('aria-label', num === 0 ? 'blank' : 'tile ' + num);
+    tile.dataset.index = idx;
+    if(num !== 0) tile.textContent = num;
+    // pointer / touch
+    tile.addEventListener('click', onTileClick);
+    // touch handlers for better mobile feel: prevent double actions
+    tile.addEventListener('touchstart', function(e){ e.preventDefault(); onTileClick.call(this, e); }, {passive:false});
+    boardEl.appendChild(tile);
+  });
+  updateInfo();
+}
+
+function onTileClick(e){
+  if(!gameRunning) return;
+  const idx = Number(this.dataset.index ?? e.currentTarget.dataset.index);
+  const blankIdx = numbers.indexOf(0);
+  if(canSwap(idx, blankIdx)){
+    swapAndUpdate(idx, blankIdx);
+  }
+}
+
+function canSwap(i1,i2){
+  const p1 = indexToPos(i1), p2 = indexToPos(i2);
+  return Math.abs(p1.r - p2.r) + Math.abs(p1.c - p2.c) === 1;
+}
+
+function swapAndUpdate(i1,i2){
+  [numbers[i1], numbers[i2]] = [numbers[i2], numbers[i1]];
+  moves++;
+  playMoveSound();
+  buildBoard();
+  updateScore();
+  updateInfo();
+  if(checkWin()){
+    onWin();
+  }
+}
+
+function checkWin(){
+  for(let i=0;i<numbers.length-1;i++){
+    if(numbers[i] !== i+1) return false;
+  }
+  return numbers[numbers.length-1] === 0;
+}
+
+// Game controls
+function startGame(){
+  numbers = makeSolvableShuffle();
+  moves = 0;
+  timeLeft = START_TIME;
+  score = 0;
+  gameRunning = true;
+  statusEl.textContent = '';
+  if(timerInterval) clearInterval(timerInterval);
+  timerInterval = setInterval(tick, 1000);
+  buildBoard();
+}
+
+function tick(){
+  if(!gameRunning) return;
+  timeLeft--;
+  if(timeLeft <= 0){
+    timeLeft = 0;
+    onTimeUp();
+  }
+  updateScore();
+  updateInfo();
+}
+
+function restartGame(){
+  if(timerInterval) clearInterval(timerInterval);
+  startGame();
+}
+
+function shuffleOnly(){
+  numbers = makeSolvableShuffle();
+  moves = 0;
+  updateScore();
+  buildBoard();
+}
+
+function quitGame(){
+  // "Quit" for web: stop the game and reset to initial state
+  if(timerInterval) clearInterval(timerInterval);
+  gameRunning = false;
+  numbers = [];
+  for(let i=1;i<GRID_SIZE*GRID_SIZE;i++) numbers.push(i);
+  numbers.push(0);
+  moves = 0;
+  timeLeft = START_TIME;
+  score = 0;
+  statusEl.textContent = 'Game stopped';
+  buildBoard();
+}
+
+function updateInfo(){
+  movesEl.textContent = moves;
+  const mins = Math.floor(timeLeft / 60);
+  const secs = timeLeft % 60;
+  timeEl.textContent = `${mins}:${secs.toString().padStart(2,'0')}`;
+  scoreEl.textContent = score;
+}
+
+function updateScore(){
+  const timeFactor = Math.max(0, timeLeft);
+  const movePenalty = moves * 5;
+  const base = 500;
+  score = Math.max(0, base + Math.floor(timeFactor * 4) - movePenalty);
+}
+
+function playMoveSound(){
+  if(!moveSound) return;
+  try {
+    moveSound.currentTime = 0;
+    moveSound.play().catch(()=>{ /* user gesture required on some browsers */});
+  } catch(e){}
+}
+function playWinSound(){
+  if(!winSound) return;
+  try {
+    winSound.currentTime = 0;
+    winSound.play().catch(()=>{});
+  } catch(e){}
+}
+
+function onWin(){
+  gameRunning = false;
+  if(timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+  statusEl.textContent = 'You Win!';
+  playWinSound();
+  updateScore();
+  updateInfo();
+  // small celebrate effect: animate tiles
+  setTimeout(()=> {
+    boardEl.querySelectorAll('.tile.num').forEach((t,i)=>{
+      t.style.transform = 'scale(1.05) translateY(-6px)';
+      setTimeout(()=> t.style.transform = '', 260);
+    });
+  }, 100);
+}
+
+function onTimeUp(){
+  gameRunning = false;
+  if(timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+  statusEl.textContent = 'Time Up!';
+  updateInfo();
+}
+
+// Keyboard arrows
+window.addEventListener('keydown', (e)=>{
+  if(!gameRunning) return;
+  const blank = numbers.indexOf(0);
+  let target = null;
+  if(e.key === 'ArrowUp'){ // move blank up means swap with tile below (player pressed up -> blank goes up; we want to move tile down into blank)
+    // pressing ArrowUp should move the tile above the blank into the blank (i.e., blank goes down)
+    // but more intuitive: ArrowUp moves the tile below the blank up into blank? Common confusion. We'll implement: ArrowUp moves blank up (swap with tile above) to match original Kivy behavior mapping.
+    const {r,c} = indexToPos(blank);
+    if(r < GRID_SIZE - 1) target = posToIndex(r+1, c); // swap blank with tile below (blank moves down)
+    // To keep consistent with Kivy mapping (UP moves blank up) we used reverse; users can try and adjust.
+  } else if(e.key === 'ArrowDown'){
+    const {r,c} = indexToPos(blank);
+    if(r > 0) target = posToIndex(r-1,c);
+  } else if(e.key === 'ArrowLeft'){
+    const {r,c} = indexToPos(blank);
+    if(c < GRID_SIZE - 1) target = posToIndex(r, c+1);
+  } else if(e.key === 'ArrowRight'){
+    const {r,c} = indexToPos(blank);
+    if(c > 0) target = posToIndex(r, c-1);
+  }
+  if(target !== null && canSwap(blank, target)){
+    swapAndUpdate(blank, target);
+  }
+});
+
+// Swipe support (optional) — quick detection on board
+let touchStartX = 0, touchStartY = 0, touchIndex = null;
+boardEl.addEventListener('touchstart', (e)=>{
+  if(!gameRunning) return;
+  const t = e.target.closest('.tile');
+  if(!t) return;
+  touchStartX = e.touches[0].clientX;
+  touchStartY = e.touches[0].clientY;
+  touchIndex = Number(t.dataset.index);
+}, {passive:true});
+boardEl.addEventListener('touchend', (e)=>{
+  if(!gameRunning || touchIndex === null) { touchIndex = null; return; }
+  const touchEndX = (e.changedTouches && e.changedTouches[0] && e.changedTouches[0].clientX) || touchStartX;
+  const touchEndY = (e.changedTouches && e.changedTouches[0] && e.changedTouches[0].clientY) || touchStartY;
+  const dx = touchEndX - touchStartX;
+  const dy = touchEndY - touchStartY;
+  const absDx = Math.abs(dx), absDy = Math.abs(dy);
+  const blank = numbers.indexOf(0);
+  // if swipe large enough, interpret as attempt to move tile in swipe direction
+  const TH = 30;
+  if(Math.max(absDx, absDy) < TH){ touchIndex = null; return; }
+  let dir = null;
+  if(absDx > absDy){
+    dir = dx > 0 ? 'right' : 'left';
+  } else {
+    dir = dy > 0 ? 'down' : 'up';
+  }
+  // determine which neighbor would move into blank based on swipe direction on a tile
+  const {r,c} = indexToPos(touchIndex);
+  let target = null;
+  if(dir === 'left') target = posToIndex(r, c-1);
+  if(dir === 'right') target = posToIndex(r, c+1);
+  if(dir === 'up') target = posToIndex(r-1, c);
+  if(dir === 'down') target = posToIndex(r+1, c);
+  if(target !== null && target >=0 && target < numbers.length && canSwap(touchIndex, target)){
+    swapAndUpdate(touchIndex, target);
+  }
+  touchIndex = null;
+}, {passive:true});
+
+// UI hook-ups
+startBtn.addEventListener('click', ()=> startGame());
+restartBtn.addEventListener('click', ()=> restartGame());
+shuffleBtn.addEventListener('click', ()=> shuffleOnly());
+quitBtn.addEventListener('click', ()=> quitGame());
+
+// Initialize solved board
+(function init(){
+  numbers = [];
+  for(let i=1;i<GRID_SIZE*GRID_SIZE;i++) numbers.push(i);
+  numbers.push(0);
+  buildBoard();
+  statusEl.textContent = 'Ready';
+})();
+
+</script>
+</body>
+</html>

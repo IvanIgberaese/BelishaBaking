@@ -1,0 +1,539 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>HTML Platformer (Mario-style) — Demo</title>
+<style>
+  :root {
+    --bg: #7ec0ee;
+    --ground: #5c3a21;
+    --platform: #8bc34a;
+    --player: #ff4757;
+    --coin: #ffd93b;
+    --enemy: #2f3542;
+    --flag: #ff7f50;
+  }
+  html,body{height:100%; margin:0; font-family:Inter,system-ui,Arial;}
+  body{background:var(--bg); display:flex; align-items:center; justify-content:center; padding:12px;}
+  .game-wrap{ width:100%; max-width:920px; background:linear-gradient(#cbe9ff, #7ec0ee); border-radius:12px; box-shadow:0 18px 40px rgba(10,10,30,.12); padding:14px; box-sizing:border-box;}
+  header{display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;}
+  h1{font-size:16px; margin:0; color:#073b4c;}
+  .hud{display:flex; gap:12px; align-items:center; color:#073b4c;}
+  canvas{background:linear-gradient(#8fd3ff, rgba(255,255,255,0.06)); display:block; width:100%; height:auto; border-radius:8px; touch-action:none;}
+  .controls{display:flex; gap:8px; margin-top:8px; justify-content:center;}
+  .control-btn{background:rgba(0,0,0,0.12); padding:10px 14px; border-radius:8px; color:white; border:0; font-weight:700; user-select:none;}
+  .touch-controls{display:none; position:relative; margin-top:8px;}
+  .touch-left, .touch-right, .touch-jump { position: absolute; border-radius:10px; opacity:0.9; font-weight:700; }
+  .touch-left, .touch-right { width:75px; height:75px; bottom:18px; background:rgba(0,0,0,0.28); display:flex; align-items:center; justify-content:center; color:white; }
+  .touch-right { left:95px; }
+  .touch-left { left:8px; }
+  .touch-jump { right:18px; width:86px; height:86px; bottom:12px; background:rgba(0,0,0,0.28); display:flex; align-items:center; justify-content:center; color:white; }
+  /* show touch controls on small screens */
+  @media (max-width:720px){
+    .touch-controls{display:block;}
+    .controls{display:none;}
+    header h1{font-size:14px;}
+  }
+  .small{font-size:13px; color:#033249; opacity:.9;}
+  .center{display:flex; align-items:center; gap:6px;}
+  .muted{color:rgba(0,0,0,0.45); font-size:13px;}
+  button:active{transform:translateY(1px);}
+</style>
+</head>
+<body>
+  <div class="game-wrap">
+    <header>
+      <div>
+        <h1>HTML Platformer Demo</h1>
+        <div class="small">Developer: Ivan Igberaese</div>
+      </div>
+      <div class="hud">
+        <div class="center"><strong>Score:</strong> <span id="score" style="margin-left:6px">0</span></div>
+        <div class="center"><strong>Lives:</strong> <span id="lives" style="margin-left:6px">3</span></div>
+        <div class="center"><strong>Level:</strong> <span id="level" style="margin-left:6px">1</span></div>
+      </div>
+    </header>
+
+    <canvas id="gameCanvas" width="832" height="480" aria-label="Platformer game canvas"></canvas>
+
+    <div class="controls" role="region" aria-label="Desktop controls">
+      <button class="control-btn" id="leftBtn">◀ Left</button>
+      <button class="control-btn" id="rightBtn">Right ▶</button>
+      <button class="control-btn" id="jumpBtn">⬆ Jump</button>
+      <button class="control-btn" id="restartBtn">⟲ Restart</button>
+    </div>
+
+    <div class="touch-controls" aria-hidden="false">
+      <div class="touch-left" id="touchLeft">◀</div>
+      <div class="touch-right" id="touchRight">▶</div>
+      <div class="touch-jump" id="touchJump">⬆</div>
+    </div>
+
+    <div style="height:8px"></div>
+    <div class="muted">Tip: Arrow keys or on-screen buttons to move. Jump on enemies to defeat them. Reach the goal flag.</div>
+  </div>
+
+<script>
+/* platformer.html
+   Simple 2D platformer (tile-based) - single file
+   Developer: Ivan Igberaese
+*/
+
+// --- Configuration ---
+const TILE = 32;                   // tile size (px)
+const COLS = 26;                   // number of columns in level (affects canvas world width)
+const ROWS = 15;                   // rows
+const GRAVITY = 0.9;               // gravity per frame
+const MOVE_ACC = 0.6;              // horizontal acceleration
+const MAX_SPEED_X = 6;             // terminal horizontal speed
+const FRICTION = 0.8;              // ground friction
+const JUMP_V = -20.5;              // initial jump velocity
+const PLAYER_W = 28, PLAYER_H = 30; // player size
+const RESPAWN = { x: 2 * TILE, y: (ROWS-3) * TILE - PLAYER_H }; // respawn position
+
+// Tile types
+// 0 empty, 1 ground, 2 platform (single tile), 3 coin, 4 enemy, 5 flag (goal)
+const TILE_EMPTY = 0, TILE_GROUND = 1, TILE_PLATFORM = 2, TILE_COIN = 3, TILE_ENEMY = 4, TILE_FLAG = 5;
+
+// --- Canvas setup ---
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// make canvas size responsive while keeping integer tile scaling
+function resizeCanvasToFit() {
+  const containerWidth = Math.min(window.innerWidth - 48, 920);
+  const scale = containerWidth / canvas.width;
+  canvas.style.transform = `scale(${scale})`;
+  canvas.style.transformOrigin = 'top left';
+}
+window.addEventListener('resize', resizeCanvasToFit);
+resizeCanvasToFit();
+
+// HUD
+const scoreEl = document.getElementById('score');
+const livesEl = document.getElementById('lives');
+const levelEl = document.getElementById('level');
+
+// --- Game state ---
+let currentLevelIndex = 0;
+let levels = [];
+let player = null;
+let keys = {};
+let score = 0;
+let lives = 3;
+let gamePaused = false;
+let enemies = [];
+
+// Simple level design using array of rows (COLS*ROWS length)
+function makeLevelFromString(rowsArray) {
+  const grid = [];
+  rowsArray.forEach(rowStr => {
+    const row = rowStr.split(',').map(n => parseInt(n));
+    grid.push(...row);
+  });
+  return grid;
+}
+
+/* Example Level 1 (COLS x ROWS = 26 x 15)
+   We'll compose rows as strings to keep it readable.
+   0=empty, 1=ground, 2=platform, 3=coin, 4=enemy, 5=flag
+*/
+const level1Rows = [
+  // top rows (mostly empty)
+  "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0",
+  "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0",
+  "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0",
+  "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0", // coin near top-right
+  "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,0,0",
+  "0,0,0,0,0,0,3,0,0,0,0,0,0,0,2,2,2,0,0,0,0,0,0,0,0,0",
+  "0,0,0,4,0,0,0,0,0,3,0,0,0,0,0,0,0,0,4,0,0,0,0,0,0,0",
+  "0,0,0,1,1,1,0,0,0,1,1,1,0,0,1,1,1,0,1,1,0,0,0,0,0,0",
+  "0,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0",
+  "0,0,0,0,0,0,0,0,2,2,2,0,0,0,0,0,2,2,2,0,0,0,0,0,0,0",
+  "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0",
+  "1,1,1,0,0,0,0,1,1,1,0,0,0,1,1,1,0,1,1,1,0,0,0,1,1,1",
+  "1,1,1,0,0,0,0,1,1,1,0,0,0,1,1,1,0,1,1,1,0,0,0,1,1,1",
+  "1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1",
+  "1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,5,1"
+];
+
+levels.push(makeLevelFromString(level1Rows));
+
+// Additional levels can be added similarly: levels.push(makeLevelFromString(...));
+
+// --- Player & enemy constructors ---
+function createPlayer() {
+  return {
+    x: RESPAWN.x,
+    y: RESPAWN.y,
+    w: PLAYER_W,
+    h: PLAYER_H,
+    vx: 0,
+    vy: 0,
+    onGround: false,
+    canJump: true,
+    facing: 'right',
+    respawnX: RESPAWN.x,
+    respawnY: RESPAWN.y
+  };
+}
+
+function spawnEnemiesFromGrid(grid) {
+  const arr = [];
+  for(let r=0;r<ROWS;r++){
+    for(let c=0;c<COLS;c++){
+      const idx = r*COLS + c;
+      if(grid[idx] === TILE_ENEMY) {
+        arr.push({
+          x: c * TILE + 2,
+          y: r * TILE,
+          w: 28,
+          h: 28,
+          dir: 1,
+          speed: 1.2,
+          alive: true
+        });
+        // clear enemy tile so it doesn't block as ground
+        grid[idx] = TILE_EMPTY;
+      }
+    }
+  }
+  return arr;
+}
+
+// --- Utility ---
+function gridAt(x,y,grid) {
+  const c = Math.floor(x / TILE);
+  const r = Math.floor(y / TILE);
+  if(c < 0 || c >= COLS || r < 0 || r >= ROWS) return TILE_GROUND; // treat OOB as ground
+  return grid[r * COLS + c];
+}
+
+function setGridTile(grid, c, r, val) {
+  if(c >= 0 && c < COLS && r >=0 && r < ROWS) grid[r * COLS + c] = val;
+}
+
+// --- Collision helpers (AABB) ---
+function rectsOverlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+// --- Initialize level ---
+function loadLevel(index) {
+  if(index < 0 || index >= levels.length) index = 0;
+  currentLevelIndex = index;
+  const grid = levels[index].slice(); // copy
+  player = createPlayer();
+  enemies = spawnEnemiesFromGrid(grid);
+  score = 0;
+  lives = 3;
+  updateHUD();
+  return grid;
+}
+
+// --- draw functions ---
+function drawGrid(grid, camX, camY) {
+  for(let r=0;r<ROWS;r++){
+    for(let c=0;c<COLS;c++){
+      const val = grid[r*COLS + c];
+      const x = c * TILE - camX;
+      const y = r * TILE - camY;
+      if(val === TILE_GROUND) {
+        ctx.fillStyle = '#5c3a21';
+        ctx.fillRect(x, y, TILE, TILE);
+        ctx.strokeStyle = '#3a2413';
+        ctx.strokeRect(x, y, TILE, TILE);
+      } else if(val === TILE_PLATFORM) {
+        ctx.fillStyle = '#8bc34a';
+        ctx.fillRect(x+4, y+8, TILE-8, TILE/2);
+      } else if(val === TILE_COIN) {
+        ctx.fillStyle = '#ffd93b';
+        ctx.beginPath();
+        ctx.arc(x + TILE/2, y + TILE/2, TILE/4, 0, Math.PI*2);
+        ctx.fill();
+      } else if(val === TILE_FLAG) {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(x + TILE/2 - 3, y + 4, 6, TILE-8);
+        ctx.fillStyle = '#ff7f50';
+        ctx.fillRect(x + TILE/2 + 3, y + 10, 12, 8);
+      }
+    }
+  }
+}
+
+function drawPlayer(camX, camY) {
+  ctx.fillStyle = '#ff4757';
+  ctx.fillRect(player.x - camX, player.y - camY, player.w, player.h);
+  // eye
+  ctx.fillStyle = '#fff';
+  const eyeX = player.x - camX + (player.facing==='right' ? player.w-10 : 6);
+  ctx.fillRect(eyeX, player.y - camY + 6, 4, 4);
+}
+
+function drawEnemies(camX, camY) {
+  ctx.fillStyle = '#2f3542';
+  enemies.forEach(en => {
+    if(!en.alive) return;
+    ctx.fillRect(en.x - camX, en.y - camY, en.w, en.h);
+  });
+}
+
+// --- Game logic: collisions with tiles and resolution ---
+function resolveCollisions(grid) {
+  // We'll move player stepwise: update X then Y, checking collisions with ground tiles
+  // Horizontal
+  player.x += player.vx;
+  // check collisions with ground tiles at player's corners
+  let collidedX = false;
+  const cornersX = [
+    {x: player.x, y: player.y},
+    {x: player.x + player.w, y: player.y},
+    {x: player.x, y: player.y + player.h},
+    {x: player.x + player.w, y: player.y + player.h}
+  ];
+  for(const pt of cornersX) {
+    const tile = gridAt(pt.x, pt.y, grid);
+    if(tile === TILE_GROUND) { collidedX = true; break; }
+  }
+  if(collidedX) {
+    // push back
+    if(player.vx > 0) {
+      player.x = Math.floor((player.x + player.w) / TILE) * TILE - player.w - 0.01;
+    } else if(player.vx < 0) {
+      player.x = Math.floor(player.x / TILE) * TILE + TILE + 0.01;
+    }
+    player.vx = 0;
+  }
+
+  // Vertical
+  player.y += player.vy;
+  player.onGround = false;
+  const cornersY = [
+    {x: player.x + 2, y: player.y},
+    {x: player.x + player.w - 2, y: player.y},
+    {x: player.x + 2, y: player.y + player.h},
+    {x: player.x + player.w - 2, y: player.y + player.h}
+  ];
+  for(const pt of cornersY) {
+    const tile = gridAt(pt.x, pt.y, grid);
+    if(tile === TILE_GROUND) {
+      if(player.vy > 0) {
+        // landed on ground
+        player.y = Math.floor((player.y + player.h) / TILE) * TILE - player.h - 0.01;
+        player.vy = 0;
+        player.onGround = true;
+        player.canJump = true;
+      } else if(player.vy < 0) {
+        // hit head
+        player.y = Math.floor(player.y / TILE) * TILE + TILE + 0.01;
+        player.vy = 0;
+      }
+    }
+  }
+
+  // Interact with coins, platforms, flag
+  // Coins: if player's center overlaps coin tile, collect
+  const centerX = player.x + player.w/2;
+  const centerY = player.y + player.h/2;
+  const centerTileIdx = Math.floor(centerY / TILE) * COLS + Math.floor(centerX / TILE);
+  const tileHere = grid[centerTileIdx];
+  if(tileHere === TILE_COIN) {
+    grid[centerTileIdx] = TILE_EMPTY;
+    score += 10;
+    updateHUD();
+  } else if(tileHere === TILE_FLAG) {
+    // Level complete
+    levelComplete();
+  }
+}
+
+// --- Enemy logic ---
+function updateEnemies(grid) {
+  enemies.forEach(en => {
+    if(!en.alive) return;
+    // Basic patrol: move horizontally; change dir on edge or ground missing
+    en.x += en.dir * en.speed;
+    // check tile under feet ahead
+    const frontX = en.dir > 0 ? en.x + en.w + 2 : en.x - 2;
+    const footY = en.y + en.h + 2;
+    const tileUnder = gridAt(frontX, footY, grid);
+    // also check if hits a wall
+    const frontTile = gridAt(en.x + (en.dir>0?en.w+2:-2), en.y + en.h/2, grid);
+    if(tileUnder === TILE_EMPTY || frontTile === TILE_GROUND) {
+      en.dir *= -1;
+    }
+    // enemy gravity (simple)
+    // If falls into ground, snap to ground
+    // (skip complex vertical physics for enemies here)
+  });
+}
+
+// --- Player vs enemy interactions ---
+function handlePlayerEnemy() {
+  enemies.forEach(en => {
+    if(!en.alive) return;
+    const eRect = {x: en.x, y: en.y, w: en.w, h: en.h};
+    const pRect = {x: player.x, y: player.y, w: player.w, h: player.h};
+    if(rectsOverlap(eRect, pRect)) {
+      // if player is falling and hits enemy from above -> defeat enemy
+      if(player.vy > 1 && (player.y + player.h - (en.y + 6)) < 20) {
+        en.alive = false;
+        score += 50;
+        player.vy = JUMP_V / 2; // bounce
+        updateHUD();
+      } else {
+        // player hurt -> lose life and respawn
+        loseLife();
+      }
+    }
+  });
+}
+
+// --- Level complete & life handling ---
+function levelComplete() {
+  gamePaused = true;
+  setTimeout(()=> {
+    alert('Level complete! Proceeding to next level (or restart).');
+    // Only one level now: restart same level
+    loadLevel(0);
+    gamePaused = false;
+  }, 100);
+}
+
+function loseLife() {
+  lives--;
+  updateHUD();
+  if(lives <= 0) {
+    setTimeout(()=> {
+      alert('Game over! Restarting level.');
+      loadLevel(currentLevelIndex);
+    }, 100);
+  } else {
+    // respawn player a little later
+    player.x = player.respawnX;
+    player.y = player.respawnY;
+    player.vx = 0;
+    player.vy = 0;
+  }
+}
+
+// --- Update HUD ---
+function updateHUD() {
+  scoreEl.textContent = score;
+  livesEl.textContent = lives;
+  levelEl.textContent = currentLevelIndex + 1;
+}
+
+// --- Main game loop ---
+let grid = loadLevel(0);
+
+function step() {
+  if(gamePaused) return;
+  // input
+  if(keys.left) {
+    player.vx = Math.max(player.vx - MOVE_ACC, -MAX_SPEED_X);
+    player.facing = 'left';
+  } else if(keys.right) {
+    player.vx = Math.min(player.vx + MOVE_ACC, MAX_SPEED_X);
+    player.facing = 'right';
+  } else {
+    // apply friction
+    player.vx *= FRICTION;
+    if(Math.abs(player.vx) < 0.1) player.vx = 0;
+  }
+
+  // gravity
+  player.vy += GRAVITY;
+
+  // limit vertical speed
+  if(player.vy > 30) player.vy = 30;
+
+  // move and resolve collisions
+  resolveCollisions(grid);
+
+  // enemies
+  updateEnemies(grid);
+
+  // player vs enemies
+  handlePlayerEnemy();
+
+  // camera: simple follow centered on player
+  const camX = Math.max(0, Math.min(player.x - canvas.width/2 + player.w/2, COLS*TILE - canvas.width));
+  const camY = Math.max(0, Math.min(player.y - canvas.height/2 + player.h/2, ROWS*TILE - canvas.height));
+
+  // clear
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  // draw background sky (basic)
+  ctx.fillStyle = '#9de0ff';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  // draw grid objects
+  drawGrid(grid, camX, camY);
+
+  // draw enemies & player
+  drawEnemies(camX, camY);
+  drawPlayer(camX, camY);
+
+  // debug: draw player bbox (optional)
+  // ctx.strokeStyle='rgba(0,0,0,0.2)'; ctx.strokeRect(player.x-camX, player.y-camY, player.w, player.h);
+
+  requestAnimationFrame(step);
+}
+
+// --- Input handlers ---
+window.addEventListener('keydown', e => {
+  if(e.key === 'ArrowLeft' || e.key === 'a') keys.left = true;
+  if(e.key === 'ArrowRight' || e.key === 'd') keys.right = true;
+  if(e.key === 'ArrowUp' || e.key === 'w' || e.key === ' ') {
+    if(player.onGround || player.canJump) {
+      player.vy = JUMP_V;
+      player.onGround = false;
+      player.canJump = false;
+    }
+  }
+});
+window.addEventListener('keyup', e => {
+  if(e.key === 'ArrowLeft' || e.key === 'a') keys.left = false;
+  if(e.key === 'ArrowRight' || e.key === 'd') keys.right = false;
+  if(e.key === 'ArrowUp' || e.key === 'w' || e.key === ' ') {
+    // allow jump again only when landing
+  }
+});
+
+// Desktop buttons
+document.getElementById('leftBtn').addEventListener('mousedown', ()=> keys.left = true);
+document.getElementById('leftBtn').addEventListener('mouseup', ()=> keys.left = false);
+document.getElementById('rightBtn').addEventListener('mousedown', ()=> keys.right = true);
+document.getElementById('rightBtn').addEventListener('mouseup', ()=> keys.right = false);
+document.getElementById('jumpBtn').addEventListener('click', ()=> {
+  if(player.onGround || player.canJump) {
+    player.vy = JUMP_V;
+    player.onGround = false;
+    player.canJump = false;
+  }
+});
+document.getElementById('restartBtn').addEventListener('click', ()=> {
+  loadLevel(currentLevelIndex);
+});
+
+// Touch mobile buttons
+const tLeft = document.getElementById('touchLeft');
+const tRight = document.getElementById('touchRight');
+const tJump = document.getElementById('touchJump');
+
+let touchLeftDown = false, touchRightDown = false;
+
+tLeft.addEventListener('touchstart', (e) => { e.preventDefault(); touchLeftDown = true; keys.left = true; }, {passive:false});
+tLeft.addEventListener('touchend', (e) => { e.preventDefault(); touchLeftDown = false; keys.left = false; }, {passive:false});
+tRight.addEventListener('touchstart', (e) => { e.preventDefault(); touchRightDown = true; keys.right = true; }, {passive:false});
+tRight.addEventListener('touchend', (e) => { e.preventDefault(); touchRightDown = false; keys.right = false; }, {passive:false});
+tJump.addEventListener('touchstart', (e) => { e.preventDefault(); if(player.onGround || player.canJump) { player.vy = JUMP_V; player.onGround = false; player.canJump = false; } }, {passive:false});
+
+// initialize and run
+grid = loadLevel(0);
+requestAnimationFrame(step);
+</script>
+</body>
+</html>
