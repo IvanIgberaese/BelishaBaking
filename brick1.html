@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Brick Breaker — HTML/CSS/JS</title>
+<style>
+  :root{--bg:#0b1220;--panel:#071827;--accent:#4ad9a6;--muted:#9fb8b1}
+  html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial;background:linear-gradient(180deg,var(--bg),#041021);color:#eef}
+  .wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+  .card{width:900px;max-width:98vw;background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01));border-radius:12px;padding:18px;box-shadow:0 12px 48px rgba(0,0,0,0.6);display:grid;grid-template-columns:1fr 320px;gap:18px}
+  canvas{background:#072033;border-radius:8px;display:block;margin:0 auto}
+  .sidebar{padding:12px}
+  .logo{font-weight:800;color:var(--accent);letter-spacing:0.6px}
+  .row{display:flex;justify-content:space-between;align-items:center;margin:8px 0}
+  button{background:var(--accent);color:#03221a;border:0;padding:10px 12px;border-radius:8px;font-weight:700;cursor:pointer}
+  .muted{color:var(--muted);font-size:13px}
+  .controls{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  .touch{display:none}
+  @media (max-width:980px){.card{grid-template-columns:1fr;}.touch{display:flex}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div>
+      <canvas id="game" width="720" height="480"></canvas>
+    </div>
+    <aside class="sidebar">
+      <div class="logo">Brick Breaker</div>
+      <div class="row"><div>Score</div><div id="score">0</div></div>
+      <div class="row"><div>Lives</div><div id="lives">3</div></div>
+      <div class="row"><div>Level</div><div id="level">1</div></div>
+      <div style="margin-top:12px"><button id="startBtn">Start / Restart</button></div>
+      <div class="controls">
+        <button id="pauseBtn">Pause</button>
+        <button id="nextBtn">Next Level</button>
+      </div>
+      <div style="margin-top:14px" class="muted">Controls: ← → or A/D to move, Space to launch. On mobile use touch controls below.</div>
+      <div class="touch" style="margin-top:12px">
+        <button id="leftTouch">◀</button>
+        <button id="launchTouch">⤴</button>
+        <button id="rightTouch">▶</button>
+      </div>
+      <div style="margin-top:18px;font-size:13px;opacity:0.9" class="muted">This is a self-contained single-file game — save as <code>index.html</code> and open in a browser.</div>
+    </aside>
+  </div>
+</div>
+<script>
+// Brick Breaker — single file
+// Features: paddle, ball, bricks, scoring, lives, multiple levels, simple audio, keyboard + touch
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.getElementById('score');
+const livesEl = document.getElementById('lives');
+const levelEl = document.getElementById('level');
+const startBtn = document.getElementById('startBtn');
+const pauseBtn = document.getElementById('pauseBtn');
+const nextBtn = document.getElementById('nextBtn');
+const leftTouch = document.getElementById('leftTouch');
+const rightTouch = document.getElementById('rightTouch');
+const launchTouch = document.getElementById('launchTouch');
+
+const W = canvas.width, H = canvas.height;
+
+// audio
+const audioCtx = (typeof AudioContext !== 'undefined') ? new AudioContext() : null;
+function sfx(freq=440, dur=0.06, vol=0.05){ if(!audioCtx) return; const o = audioCtx.createOscillator(); const g = audioCtx.createGain(); o.type='square'; o.frequency.value = freq; g.gain.value = vol; o.connect(g); g.connect(audioCtx.destination); o.start(); setTimeout(()=>o.stop(), dur*1000); }
+
+// Game variables
+let paddle, ball, bricks, rows, cols, level=1, score=0, lives=3, running=false, paused=false;
+
+const LEVELS = [
+  {rows:3, cols:7, brickW:90, brickH:20, gap:8},
+  {rows:4, cols:8, brickW:78, brickH:20, gap:6},
+  {rows:5, cols:9, brickW:70, brickH:18, gap:6}
+];
+
+function resetState(){
+  paddle = {w:110,h:12,x:(W-110)/2,y:H-36,speed:10};
+  ball = {r:8,x:W/2,y:H-60,vx:0,vy:0, stuck:true, speed:6};
+  score = 0; lives = 3; level = 1; updateHUD(); buildBricks(); }
+
+function buildBricks(){
+  const L = LEVELS[(level-1) % LEVELS.length];
+  rows = L.rows; cols = L.cols; bricks = [];
+  const totalW = cols * L.brickW + (cols-1)*L.gap;
+  const offsetX = (W - totalW)/2; const offsetY = 60;
+  for(let r=0;r<rows;r++){
+    for(let c=0;c<cols;c++){
+      const b = {x: offsetX + c*(L.brickW+L.gap), y: offsetY + r*(L.brickH+L.gap), w: L.brickW, h: L.brickH, hp: 1, alive:true};
+      // increase strength on higher levels
+      if(level>2 && r%2===0) b.hp = 2;
+      bricks.push(b);
+    }
+  }
+}
+
+function updateHUD(){ scoreEl.textContent = score; livesEl.textContent = lives; levelEl.textContent = level; }
+
+// Input
+const keys = {};
+window.addEventListener('keydown', e=>{ keys[e.code]=true; if(e.code==='Space') launchBall(); if(e.code==='KeyP') togglePause(); });
+window.addEventListener('keyup', e=>{ keys[e.code]=false; });
+leftTouch && leftTouch.addEventListener('touchstart',e=>{ keys['ArrowLeft']=true; e.preventDefault(); });
+leftTouch && leftTouch.addEventListener('touchend',e=>{ keys['ArrowLeft']=false; e.preventDefault(); });
+rightTouch && rightTouch.addEventListener('touchstart',e=>{ keys['ArrowRight']=true; e.preventDefault(); });
+rightTouch && rightTouch.addEventListener('touchend',e=>{ keys['ArrowRight']=false; e.preventDefault(); });
+launchTouch && launchTouch.addEventListener('touchstart',e=>{ launchBall(); e.preventDefault(); });
+
+function launchBall(){ if(!ball.stuck) return; ball.stuck=false; // give random initial direction
+  const ang = (Math.random()*Math.PI/2) + Math.PI/4; ball.vx = Math.cos(ang)*ball.speed * (Math.random()<0.5?-1:1); ball.vy = -Math.abs(Math.sin(ang)*ball.speed); if(audioCtx && audioCtx.state==='suspended') audioCtx.resume(); sfx(880,0.04,0.04); }
+
+// collision helpers
+function rectIntersect(a,b){ return !(a.x + a.w < b.x || a.x > b.x + b.w || a.y + a.h < b.y || a.y > b.y + b.h); }
+
+function update(dt){ if(paused || !running) return;
+  // paddle move
+  if(keys['ArrowLeft'] || keys['KeyA']) paddle.x -= paddle.speed;
+  if(keys['ArrowRight'] || keys['KeyD']) paddle.x += paddle.speed;
+  paddle.x = Math.max(3, Math.min(W - paddle.w - 3, paddle.x));
+
+  // ball follow paddle when stuck
+  if(ball.stuck){ ball.x = paddle.x + paddle.w/2; ball.y = paddle.y - ball.r - 1; }
+  else {
+    ball.x += ball.vx * dt; ball.y += ball.vy * dt;
+    // wall collisions
+    if(ball.x - ball.r < 0){ ball.x = ball.r; ball.vx *= -1; sfx(660,0.03); }
+    if(ball.x + ball.r > W){ ball.x = W - ball.r; ball.vx *= -1; sfx(660,0.03); }
+    if(ball.y - ball.r < 0){ ball.y = ball.r; ball.vy *= -1; sfx(660,0.03); }
+    if(ball.y - ball.r > H){ // lost life
+      lives--; updateHUD(); sfx(140,0.08,0.06); if(lives<=0){ gameOver(); return; } ball.stuck = true; ball.vx=0; ball.vy=0; }
+
+    // paddle collision
+    const pd = {x:paddle.x, y:paddle.y, w:paddle.w, h:paddle.h};
+    const ballBox = {x:ball.x-ball.r, y:ball.y-ball.r, w:ball.r*2, h:ball.r*2};
+    if(rectIntersect(ballBox, pd) && ball.vy>0){
+      // reflect with angle based on hit point
+      const hit = (ball.x - (paddle.x + paddle.w/2)) / (paddle.w/2); // -1..1
+      const maxAngle = Math.PI * 3/8; // 67.5deg
+      const angle = hit * maxAngle;
+      const speed = Math.min(12, Math.hypot(ball.vx, ball.vy) + 0.2);
+      ball.vx = Math.sin(angle) * speed;
+      ball.vy = -Math.cos(angle) * speed;
+      ball.x = paddle.x + paddle.w/2 + Math.sin(angle)* (paddle.w/4);
+      sfx(1100,0.03,0.04);
+    }
+
+    // brick collisions
+    for(let b of bricks){ if(!b.alive) continue; const box = {x:b.x, y:b.y, w:b.w, h:b.h}; if(rectIntersect(ballBox, box)){
+        // simple collision response: invert Y and handle HP
+        // determine side of impact
+        const overlapX = (ball.x) - Math.max(b.x, Math.min(ball.x, b.x + b.w));
+        const overlapY = (ball.y) - Math.max(b.y, Math.min(ball.y, b.y + b.h));
+        if(Math.abs(overlapX) > Math.abs(overlapY)) ball.vx *= -1; else ball.vy *= -1;
+        b.hp--; if(b.hp<=0){ b.alive=false; score += 100; } else { score += 40; }
+        updateHUD(); sfx(1000,0.03,0.05); break; }
+    }
+
+    // check win
+    if(bricks.every(b=>!b.alive)){ // level cleared
+      levelUp(); return;
+    }
+  }
+}
+
+function levelUp(){ running = false; level++; updateHUD(); sfx(1760,0.12,0.06); setTimeout(()=>{ buildBricks(); ball.stuck=true; ball.vx=0; ball.vy=0; running=true; }, 700); }
+
+function gameOver(){ running=false; sfx(80,0.4,0.08); setTimeout(()=>{ alert('Game Over! Score: '+score); resetState(); }, 80); }
+
+// render
+function draw(){ ctx.clearRect(0,0,W,H);
+  // bricks
+  for(let b of bricks){ if(!b.alive) continue; ctx.fillStyle = b.hp===2? '#ff9f43' : '#4ad9a6'; ctx.fillRect(b.x, b.y, b.w, b.h); ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.strokeRect(b.x, b.y, b.w, b.h); }
+  // paddle
+  ctx.fillStyle = '#bdebd8'; roundRect(ctx, paddle.x, paddle.y, paddle.w, paddle.h, 6, true, false);
+  // ball
+  ctx.fillStyle = '#ffd166'; ctx.beginPath(); ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI*2); ctx.fill();
+  // HUD center
+}
+
+function roundRect(ctx,x,y,w,h,r,fill,stroke){ if(typeof r==='undefined') r=5; ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); if(fill) ctx.fill(); if(stroke) ctx.stroke(); }
+
+// game loop
+let last = performance.now();
+function loop(now){ const dt = Math.min(32, now - last) / 16.666; last = now; update(dt); draw(); if(running) requestAnimationFrame(loop); }
+
+// UI
+startBtn.addEventListener('click', ()=>{ resetState(); running=true; paused=false; last = performance.now(); loop(last); if(audioCtx && audioCtx.state==='suspended') audioCtx.resume(); });
+pauseBtn.addEventListener('click', ()=>{ togglePause(); });
+nextBtn.addEventListener('click', ()=>{ levelUp(); });
+
+function togglePause(){ paused = !paused; pauseBtn.textContent = paused ? 'Resume' : 'Pause'; if(!paused && running){ last = performance.now(); loop(last); } }
+
+// init
+resetState();
+
+// expose to console for debugging
+window._bb = {resetState, buildBricks, start: ()=>{ running=true; last=performance.now(); loop(last);} };
+</script>
+</body>
+</html>
